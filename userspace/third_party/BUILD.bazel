@@ -1,0 +1,11 @@
+package(default_visibility = ["//visibility:public"])
+
+# This BUILD file is necessary so that `//third_party` is a package that the
+# WORKSPACE file can reference. Without this BUILD file, Bazel will be unable to
+# pull in the project dependencies and compile the project.
+
+exports_files([
+    "iovisor_bcc/bits.bpf.h",
+    "iovisor_bcc/trace_helpers.h",
+    "util/util.h",
+])
