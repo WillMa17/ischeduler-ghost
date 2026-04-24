@@ -32,6 +32,6 @@ exec qemu-system-x86_64 \
     -drive file="$DISK",format=raw,if=virtio \
     -append "root=/dev/vda rw console=ttyS0 nokaslr" \
     -virtfs local,path="$HOST_HOME",security_model=none,mount_tag=host \
-    -netdev user,id=net0 \
+    -netdev user,id=net0,hostfwd=tcp::2222-:22 \
     -device virtio-net-pci,netdev=net0 \
     -nographic

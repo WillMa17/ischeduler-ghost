@@ -11,6 +11,12 @@ new_git_repository(
     remote = "https://github.com/google/ghost-kernel",
     branch = "ghost-v5.11",
     build_file = "//third_party:linux.BUILD",
+    # Debian Bookworm (binutils 2.40+) changed init_disassemble_info from 2
+    # args to 4. Add the two new required args to fix bpftool compilation.
+    patch_cmds = [
+        "sed -i 's/(fprintf_ftype) fprintf_json);/(fprintf_ftype) fprintf_json, (fprintf_styled_ftype) NULL);/' tools/bpf/bpftool/jit_disasm.c",
+        "sed -i 's/(fprintf_ftype) fprintf);/(fprintf_ftype) fprintf, (fprintf_styled_ftype) NULL);/' tools/bpf/bpftool/jit_disasm.c",
+    ],
 )
 
 # Abseil depends on this.
