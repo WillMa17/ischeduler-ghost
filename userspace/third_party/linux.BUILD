@@ -70,6 +70,8 @@ make(
     # The default targets are `` and `install`, but we do not want the `install`
     # target. Thus, specify that the only target is `` (i.e., just `make`).
     targets = [""],
+    # Disable libbfd to avoid binutils >= 2.39 init_disassemble_info() incompatibility.
+    args = ["feature-libbfd=0", "feature-disassembler-four-args=0"],
     # See the comment in the `:libbpf` target for an explanation of why this
     # copy is necessary.
     postfix_script = "cp $EXT_BUILD_ROOT/external/linux/tools/bpf/bpftool/bpftool $INSTALLDIR/bin/bpftool",

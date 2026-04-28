@@ -119,6 +119,90 @@ cc_binary(
     ],
 )
 
+cc_binary(
+    name = "test_ghost_sender",
+    srcs = ["schedulers/cfs_ipc/test_ghost_sender.cc"],
+    copts = compiler_flags,
+    deps = [
+        ":agent",
+        ":base",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/flags:parse",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/time",
+    ],
+)
+
+cc_binary(
+    name = "agent_cfs_ipc",
+    srcs = [
+        "schedulers/cfs_ipc/cfs_ipc_agent.cc",
+        "schedulers/cfs_ipc/cfs_ipc_scheduler.cc",
+        "schedulers/cfs_ipc/cfs_ipc_scheduler.h",
+    ],
+    copts = compiler_flags,
+    deps = [
+        ":agent",
+        ":base",
+        ":cfs_scheduler",
+        ":topology",
+        "@com_google_absl//absl/debugging:symbolize",
+        "@com_google_absl//absl/flags:parse",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
+    ],
+)
+
+cc_library(
+    name = "cfs_mem_scheduler",
+    srcs = [
+        "schedulers/cfs_mem/cfs_mem_scheduler.cc",
+    ],
+    hdrs = [
+        "schedulers/cfs_mem/cfs_mem_scheduler.h",
+    ],
+    copts = compiler_flags,
+    deps = [
+        ":agent",
+        ":base",
+        ":cfs_scheduler",
+        ":topology",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
+    ],
+)
+
+cc_binary(
+    name = "agent_cfs_mem",
+    srcs = [
+        "schedulers/cfs_mem/cfs_mem_agent.cc",
+    ],
+    copts = compiler_flags,
+    deps = [
+        ":agent",
+        ":base",
+        ":cfs_mem_scheduler",
+        ":topology",
+        "@com_google_absl//absl/debugging:symbolize",
+        "@com_google_absl//absl/flags:parse",
+    ],
+)
+
+cc_binary(
+    name = "test_mem_sender",
+    srcs = ["schedulers/cfs_mem/test_mem_sender.cc"],
+    copts = compiler_flags,
+    deps = [
+        ":agent",
+        ":base",
+        ":cfs_mem_scheduler",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/flags:parse",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/time",
+    ],
+)
+
 cc_library(
     name = "cfs_scheduler",
     srcs = [
@@ -1441,5 +1525,20 @@ cc_test(
         ":topology",
         "@com_google_benchmark//:benchmark",
         "@com_google_googletest//:gtest",
+    ],
+)
+
+cc_binary(
+    name = "workload_mixed",
+    srcs = ["schedulers/cfs_mem/workload_mixed.cc"],
+    copts = compiler_flags,
+    deps = [
+        ":agent",
+        ":base",
+        ":cfs_mem_scheduler",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/flags:parse",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/time",
     ],
 )

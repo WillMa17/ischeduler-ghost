@@ -1128,6 +1128,45 @@ CfsTask* CfsRq::PickNextTask(CfsTask* prev, TaskAllocator<CfsTask>* allocator,
   return task;
 }
 
+void CfsScheduler::BoostTask(Gtid gtid) {
+  CfsTask* task = allocator()->GetTask(gtid);
+  if (!task) return;
+  int cpu_id = task->cpu;
+  if (cpu_id < 0 || cpu_id >= MAX_CPUS) return;
+  CpuState* cs = &cpu_states_[cpu_id];
+  absl::MutexLock l(&cs->run_queue.mu_);
+  // Only boost tasks currently sitting in the rq. Running, blocked, and
+  // migrating tasks are left alone -- Schedule() will pick them up naturally
+  // when they next enqueue.
+  if (task->task_state.OnRqQueued()) {
+    cs->run_queue.BoostTaskInRq(task);
+    cs->preempt_curr = true;
+  }
+}
+
+void CfsRq::BoostTaskInRq(CfsTask* task) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+  // Erase first; the set ordering depends on vruntime so we can't mutate it
+  // in place.
+  if (rq_.erase(task) == 0) return;
+
+  CfsTask* leftmost = rq_.empty() ? nullptr : *rq_.begin();
+  absl::Duration target;
+  if (leftmost) {
+    // Place this task strictly before the current leftmost. 1ns is enough
+    // because Less tiebreaks by pointer.
+    target = leftmost->vruntime - absl::Nanoseconds(1);
+  } else {
+    target = absl::ZeroDuration();
+  }
+  task->vruntime = target;
+
+  task->task_state.SetOnRq(CfsTaskState::OnRq::kQueued);
+  rq_.insert(task);
+  rq_size_.store(rq_.size(), std::memory_order_relaxed);
+  // After insert this task is leftmost.
+  min_vruntime_ = (*rq_.begin())->vruntime;
+}
+
 void CfsRq::DequeueTask(CfsTask* task) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
   DPRINT_CFS(2, absl::StrFormat("[%s]: Erasing task", task->gtid.describe()));
   if (rq_.erase(task)) {

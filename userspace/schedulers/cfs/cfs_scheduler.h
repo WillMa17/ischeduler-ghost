@@ -334,6 +334,12 @@ class CfsRq {
   // vruntime.
   void UpdateMinVruntime(CpuState* cs) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
 
+  // Hint-aware boost: if `task` is currently in the rq, dequeue it, set its
+  // vruntime to just below the leftmost task's vruntime, then re-insert it so
+  // it becomes the leftmost (i.e., the next task to be picked). No-op if the
+  // task is not in the rq. Caller must hold mu_.
+  void BoostTaskInRq(CfsTask* task) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
+
   // Protects this runqueue and the state of any task assoicated with the rq.
   mutable absl::Mutex mu_;
 
@@ -490,6 +496,11 @@ class CfsScheduler : public BasicDispatchScheduler<CfsTask> {
   ~CfsScheduler() final {}
 
   void Schedule(const Cpu& cpu, const StatusWord& sw);
+
+  // Boosts a ghost task by reducing its vruntime so it becomes the leftmost
+  // task in its rq, and sets preempt_curr so the currently running task is
+  // dropped on the next Schedule() pass. Safe no-op if the task isn't on rq.
+  void BoostTask(Gtid gtid);
 
   void EnclaveReady() final;
   Channel& GetDefaultChannel() final { return *default_channel_; };

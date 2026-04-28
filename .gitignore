@@ -1,0 +1,14 @@
+# Bazel build artifacts
+userspace/bazel-bin
+userspace/bazel-out
+userspace/bazel-testlogs
+userspace/bazel-userspace
+userspace/MODULE.bazel
+userspace/MODULE.bazel.lock
+
+# VM disk image (12GB, generated locally)
+vm/ghost.img
+
+# Editor / OS
+*.swp
+.DS_Store
