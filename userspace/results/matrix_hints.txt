@@ -1,0 +1,44 @@
+iSchedular Matrix Workload
+  Deadline jobs:    2 (size 256x256, deadline 500ms)
+  Throughput jobs:  2 (size 128x128, duration 10s)
+  Latency jobs:     2 (size 32x32, 200 requests)
+  Hints:            ENABLED
+
+Throughput jobs saturating CPUs...
+All deadline jobs completed.
+All latency jobs completed.
+Throughput jobs stopped.
+
+================================================================
+  iSchedular Matrix Workload Results
+  Mode: HINTS ENABLED
+================================================================
+
+--- DEADLINE SLO ---
+  Job 0: 168ms / 500ms deadline  [MET]
+  Job 1: 189ms / 500ms deadline  [MET]
+  Deadlines met: 2 / 2 (100%)
+
+--- THROUGHPUT SLO ---
+  Total multiplies completed: 112
+
+--- LATENCY SLO ---
+  Total requests:  400
+  p50:             273.00 us
+  p90:             286.10 us
+  p95:             295.00 us
+  p99:             459.04 us
+  p999:            840.80 us
+  max:             919.00 us
+  mean:            282.94 us
+
+================================================================
+
+  SUMMARY:
+  SLO Type             Result         
+  Deadline             2/2 met
+  Throughput           112 multiplies
+  Latency              p99=459.0us
+================================================================
+
+Results saved to /tmp/ischeduler_matrix_results.csv

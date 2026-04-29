@@ -1,0 +1,32 @@
+iSchedular Workload
+  Server threads:   2
+  Batch threads:    4
+  Requests/server:  100
+  Server work:      50 us
+  Server sleep avg: 200 us
+  Batch duration:   10 sec
+  Hints:            DISABLED
+
+All server threads completed.
+All batch threads stopped.
+
+================================================================
+  iSchedular Evaluation Results
+  Mode: HINTS DISABLED (baseline)
+================================================================
+
+Server thread latency (wakeup to completion):
+  Total requests:  200
+  p50:             68.00 us
+  p90:             75.00 us
+  p95:             87.00 us
+  p99:             98.18 us
+  p999:            1110.04 us
+  max:             1357.00 us
+  mean:            76.29 us
+
+Batch thread throughput:
+  Total work units: 14166
+================================================================
+
+Results saved to /tmp/ischeduler_results.csv

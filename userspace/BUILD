@@ -1557,3 +1557,18 @@ cc_binary(
         "@com_google_absl//absl/time",
     ],
 )
+
+cc_binary(
+    name = "workload_matrix",
+    srcs = ["schedulers/cfs_mem/workload_matrix.cc"],
+    copts = compiler_flags,
+    deps = [
+        ":agent",
+        ":base",
+        ":cfs_mem_scheduler",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/flags:parse",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/time",
+    ],
+)
