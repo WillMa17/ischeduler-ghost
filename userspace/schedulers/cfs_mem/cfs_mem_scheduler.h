@@ -20,19 +20,37 @@ namespace ghost {
 static constexpr int kMemMaxSlots = 256;
 static constexpr char kShmName[] = "/ghost_mem_cues";
 
-// Hint protocol: the first byte of MemCueSlot::message encodes the hint type.
-// Senders write one of these constants; the agent reads message[0] and acts
-// accordingly. Keep these stable -- both senders and the scheduler depend on
-// the exact byte values.
+// Hint protocol: the first byte of MemCueSlot::message encodes the hint
+// kind; subsequent bytes carry an optional payload (HintPayload below).
+// Keep these stable -- both senders and the scheduler depend on the exact
+// byte values.
 //   kHintNone:             no hint, ignored by the scheduler.
-//   kHintLatencySensitive: boost this thread; the scheduler will reduce its
-//                          vruntime so it becomes the leftmost task in its
-//                          per-CPU rq and preempt the current task.
-//   kHintBatch:            no-op for the scheduler; batch is the default
-//                          behavior, no demotion is needed.
+//   kHintLatencySensitive: boost this thread to the front of its rq right
+//                          now (low-latency wakeup).
+//   kHintBatch:            no-op (batch is the default behavior).
+//   kHintThroughput:       give this thread a longer time slice so CFS
+//                          does not preempt it on every period boundary.
+//                          payload.slice_us = requested slice in us.
+//   kHintDeadline:         this thread has a hard deadline at
+//                          payload.deadline_unix_ns; the scheduler boosts
+//                          it on cue arrival (treated like latency for the
+//                          duration of the request) and may also rescue it
+//                          if the deadline is becoming urgent.
 static constexpr char kHintNone = 0;
 static constexpr char kHintLatencySensitive = 1;
 static constexpr char kHintBatch = 2;
+static constexpr char kHintThroughput = 3;
+static constexpr char kHintDeadline = 4;
+
+// Payload packed into MemCueSlot::message starting at offset 1. All fields
+// are little-endian native ints; senders use memcpy so this is portable.
+// Unused fields per kind are simply ignored.
+struct HintPayload {
+  uint32_t slice_us;          // for kHintThroughput
+  uint32_t reserved;          // padding / future use
+  int64_t  deadline_unix_ns;  // for kHintDeadline
+};
+static_assert(sizeof(HintPayload) == 16);
 
 // One cache-line per ghost thread. Written by the thread; polled by the agent.
 // seq is incremented (release) after each write so the agent can detect a new

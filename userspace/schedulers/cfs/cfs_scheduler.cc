@@ -599,10 +599,11 @@ void CfsScheduler::CheckPreemptTick(const Cpu& cpu)
   if (cs->current) {
     // If we were on cpu, check if we have run for longer than
     // Granularity(). If so, force picking another task via setting current
-    // to nullptr.
+    // to nullptr. Pass cs->current so a hint-derived custom_slice can extend
+    // the per-task slice (kHintThroughput).
     if (absl::Nanoseconds(cs->current->status_word.runtime() -
                           cs->current->runtime_at_first_pick_ns) >
-        cs->run_queue.MinPreemptionGranularity()) {
+        cs->run_queue.MinPreemptionGranularity(cs->current)) {
       cs->preempt_curr = true;
     }
   }
@@ -1144,6 +1145,38 @@ void CfsScheduler::BoostTask(Gtid gtid) {
   }
 }
 
+void CfsScheduler::SetCustomSlice(Gtid gtid, absl::Duration slice) {
+  CfsTask* task = allocator()->GetTask(gtid);
+  if (!task) return;
+  // No lock: custom_slice is read by MinPreemptionGranularity inside the
+  // rq lock, but we treat the field as a single 64-bit relaxed write. If
+  // the read briefly observes a stale value the worst case is one extra
+  // (or one missing) preemption -- benign.
+  task->custom_slice = slice;
+}
+
+void CfsScheduler::SetDeadline(Gtid gtid, int64_t deadline_unix_ns) {
+  CfsTask* task = allocator()->GetTask(gtid);
+  if (!task) return;
+  task->deadline_ns = deadline_unix_ns;
+}
+
+void CfsScheduler::RescueDeadlineTasks(absl::Duration urgency) {
+  int64_t now_ns = absl::ToUnixNanos(absl::Now());
+  int64_t threshold = now_ns + absl::ToInt64Nanoseconds(urgency);
+  // Snapshot: ForEachTask holds an internal lock; we batch up gtids first
+  // so we don't try to BoostTask (which acquires a per-CPU rq lock) while
+  // holding the allocator lock.
+  std::vector<Gtid> urgent;
+  allocator()->ForEachTask([&](Gtid gtid, const CfsTask* t) {
+    if (t->deadline_ns != 0 && t->deadline_ns <= threshold) {
+      urgent.push_back(gtid);
+    }
+    return true;
+  });
+  for (Gtid g : urgent) BoostTask(g);
+}
+
 void CfsRq::BoostTaskInRq(CfsTask* task) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
   // Erase first; the set ordering depends on vruntime so we can't mutate it
   // in place.
@@ -1226,7 +1259,15 @@ void CfsRq::SetMinGranularity(absl::Duration t) {
 
 void CfsRq::SetLatency(absl::Duration t) { latency_ = t; }
 
-absl::Duration CfsRq::MinPreemptionGranularity() {
+absl::Duration CfsRq::MinPreemptionGranularity(const CfsTask* current) {
+  // Hint override: a kHintThroughput task carries a custom slice that wins
+  // over the default CFS computation. We still cap at `latency_ * 4` so a
+  // misbehaving sender can't monopolise the CPU forever.
+  if (current && current->custom_slice > absl::ZeroDuration()) {
+    absl::Duration cap = latency_ * 4;
+    return std::min(current->custom_slice, cap);
+  }
+
   // Get the number of tasks our cpu is handling. As we only call this to check
   // if cs->current should be pulled be preempted, the number of tasks
   // associated with the cpu is rq_.size() + 1;

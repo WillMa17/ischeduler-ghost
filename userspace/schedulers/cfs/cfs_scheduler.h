@@ -244,6 +244,18 @@ struct CfsTask : public Task<> {
   // has been running.
   absl::Duration vruntime;
 
+  // Hint-derived per-task state. Zero values mean "no hint", and the task
+  // is treated by stock CFS rules.
+  //   custom_slice  = requested time slice for kHintThroughput tasks. When
+  //                   non-zero, MinPreemptionGranularity returns this so
+  //                   the throughput task is not preempted on the default
+  //                   period boundary.
+  //   deadline_ns   = absolute Unix-nanosecond deadline for kHintDeadline
+  //                   tasks. The agent uses this to selectively boost
+  //                   tasks whose deadline is becoming urgent.
+  absl::Duration custom_slice = absl::ZeroDuration();
+  int64_t deadline_ns = 0;
+
   // runtime_at_first_pick is how much runtime this task had at its initial
   // picking. This timestamp does not change unless we are put back in the
   // runqueue. IOW, if we bounce between oncpu and put_prev_task_elision_,
@@ -277,7 +289,10 @@ class CfsRq {
   // rq to give it time on the cpu doesn't require a change as we still manage
   // the same number of tasks. But a task blocking, departing, or adding
   // a new task, does require an update.
-  absl::Duration MinPreemptionGranularity() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
+  // If `current` carries a hint-derived custom slice, return it. Otherwise
+  // fall back to the standard CFS computation.
+  absl::Duration MinPreemptionGranularity(const CfsTask* current = nullptr)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
 
   // PickNextTask checks if prev should run again, and if so, returns prev.
   // Otherwise, it picks the task with the smallest vruntime.
@@ -501,6 +516,23 @@ class CfsScheduler : public BasicDispatchScheduler<CfsTask> {
   // task in its rq, and sets preempt_curr so the currently running task is
   // dropped on the next Schedule() pass. Safe no-op if the task isn't on rq.
   void BoostTask(Gtid gtid);
+
+  // Records a per-task time-slice override. While `slice` is non-zero,
+  // MinPreemptionGranularity returns this value when the task is current,
+  // so CFS will not preempt it on the default period boundary. Pass
+  // ZeroDuration to clear the override.
+  void SetCustomSlice(Gtid gtid, absl::Duration slice);
+
+  // Records an absolute deadline (Unix-nanoseconds) on the task. The agent
+  // uses this on every Poll() pass to boost tasks whose deadline is closer
+  // than `urgency` -- an inexpensive O(rq) scan since deadline-tagged tasks
+  // are rare. Pass 0 to clear.
+  void SetDeadline(Gtid gtid, int64_t deadline_unix_ns);
+
+  // Walks every CFS task; for any with a non-zero deadline closer than
+  // `urgency` from now, calls BoostTask. Cheap because the allocator's
+  // ForEachTask is O(active tasks).
+  void RescueDeadlineTasks(absl::Duration urgency);
 
   void EnclaveReady() final;
   Channel& GetDefaultChannel() final { return *default_channel_; };

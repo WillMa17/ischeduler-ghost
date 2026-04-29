@@ -79,21 +79,52 @@ void MemCfsAgent::AgentThread() {
   while (!Finished() || !scheduler_->Empty(cpu())) {
     std::vector<MemCue> cues;
     if (poll_->Poll(region_, cues) > 0) {
-      // Hint-aware dispatch. message[0] selects the action:
-      //   kHintLatencySensitive -> boost the owning ghost thread by reducing
-      //                            its vruntime to the front of its rq.
-      //   kHintBatch / kHintNone -> no-op (default CFS ordering).
-      // The boost runs on every cue write, so a server thread that posts a
-      // hint immediately before its next request gets near-immediate CPU
-      // when it wakes.
+      // Hint-aware dispatch. message[0] selects the action; remaining
+      // bytes are an optional HintPayload struct (slice_us / deadline_ns).
+      //   kHintLatencySensitive -> immediate vruntime boost.
+      //   kHintDeadline         -> record absolute deadline AND boost on
+      //                            arrival (treat as latency for one frame).
+      //   kHintThroughput       -> install a per-task custom slice so CFS
+      //                            stops preempting the task on the default
+      //                            period boundary.
+      //   kHintBatch / kHintNone -> no-op.
       for (const auto& cue : cues) {
         if (cue.message.empty()) continue;
-        if (cue.message[0] != kHintLatencySensitive) continue;
+        char kind = cue.message[0];
         int64_t raw_gtid = region_->slot_gtid[cue.slot_idx];
         if (raw_gtid <= 0) continue;
-        scheduler_->BoostTask(Gtid(raw_gtid));
+        Gtid gtid(raw_gtid);
+
+        HintPayload payload{};
+        if (cue.message.size() >= 1 + sizeof(HintPayload)) {
+          memcpy(&payload, cue.message.data() + 1, sizeof(HintPayload));
+        }
+
+        switch (kind) {
+          case kHintLatencySensitive:
+            scheduler_->BoostTask(gtid);
+            break;
+          case kHintDeadline:
+            scheduler_->SetDeadline(gtid, payload.deadline_unix_ns);
+            scheduler_->BoostTask(gtid);
+            break;
+          case kHintThroughput:
+            if (payload.slice_us > 0) {
+              scheduler_->SetCustomSlice(
+                  gtid, absl::Microseconds(payload.slice_us));
+            }
+            break;
+          default:
+            break;  // kHintNone, kHintBatch, unknown -> no action
+        }
       }
     }
+
+    // Independent of cues: every Schedule() pass, rescue any deadline-
+    // tagged task whose deadline is closer than 5 ms. This catches the
+    // case where a deadline task was recorded earlier but did not get
+    // CPU and the wall-clock has now drifted into the urgency window.
+    scheduler_->RescueDeadlineTasks(absl::Milliseconds(5));
 
     scheduler_->Schedule(cpu(), status_word());
 
