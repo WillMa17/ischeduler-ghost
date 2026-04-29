@@ -244,17 +244,23 @@ struct CfsTask : public Task<> {
   // has been running.
   absl::Duration vruntime;
 
-  // Hint-derived per-task state. Zero values mean "no hint", and the task
-  // is treated by stock CFS rules.
-  //   custom_slice  = requested time slice for kHintThroughput tasks. When
-  //                   non-zero, MinPreemptionGranularity returns this so
-  //                   the throughput task is not preempted on the default
-  //                   period boundary.
-  //   deadline_ns   = absolute Unix-nanosecond deadline for kHintDeadline
-  //                   tasks. The agent uses this to selectively boost
-  //                   tasks whose deadline is becoming urgent.
+  // Hint-derived per-task state. Zero / false values mean "no hint", and
+  // the task is treated by stock CFS rules.
+  //   custom_slice    = requested time slice for kHintThroughput tasks.
+  //                     When non-zero, MinPreemptionGranularity returns
+  //                     this so the throughput task is not preempted on
+  //                     the default period boundary.
+  //   deadline_ns     = absolute Unix-ns deadline for kHintDeadline tasks.
+  //                     The agent uses this to selectively boost tasks
+  //                     whose deadline is becoming urgent.
+  //   latency_class   = sticky flag set once at startup. While true, every
+  //                     EnqueueTask of this task places it at the front
+  //                     of the rq (vruntime = leftmost - 1ns) so a wake
+  //                     gets CPU on the next Schedule pass without
+  //                     waiting for a separate cue round-trip.
   absl::Duration custom_slice = absl::ZeroDuration();
   int64_t deadline_ns = 0;
+  bool latency_class = false;
 
   // runtime_at_first_pick is how much runtime this task had at its initial
   // picking. This timestamp does not change unless we are put back in the
@@ -522,6 +528,11 @@ class CfsScheduler : public BasicDispatchScheduler<CfsTask> {
   // so CFS will not preempt it on the default period boundary. Pass
   // ZeroDuration to clear the override.
   void SetCustomSlice(Gtid gtid, absl::Duration slice);
+
+  // Marks (or unmarks) the task as latency-sensitive. While set, every
+  // EnqueueTask places this task at the front of the rq, so a wake-up
+  // does not have to wait for a cue round-trip to receive a boost.
+  void SetLatencyClass(Gtid gtid, bool on);
 
   // Records an absolute deadline (Unix-nanoseconds) on the task. The agent
   // uses this on every Poll() pass to boost tasks whose deadline is closer

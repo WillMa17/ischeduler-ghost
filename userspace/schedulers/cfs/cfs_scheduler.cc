@@ -1051,13 +1051,30 @@ void CfsRq::EnqueueTask(CfsTask* task) {
 
   DPRINT_CFS(2, absl::StrFormat("[%s]: Enqueing task", task->gtid.describe()));
 
-  // We never want to enqueue a new task with a smaller vruntime that we have
-  // currently. We also never want to have a task's vruntime go backwards,
-  // so we take the max of our current min vruntime and the tasks current one.
-  // Until load balancing is implented, this should just evaluate to
-  // min_vruntime_.
-  // TODO: come up with more logical way of handling new tasks with
-  // existing vruntimes (e.g. migration from another rq).
+  // Hint-aware front-of-queue placement. When a task is sticky-latency
+  // (latency_class) or has an urgent deadline (within 5 ms), put it at
+  // the front so a wakeup gets CPU on the next Schedule pass. This makes
+  // the latency / deadline policies work without waiting for a cue
+  // round-trip after the wake.
+  bool front = task->latency_class;
+  if (!front && task->deadline_ns != 0) {
+    int64_t now_ns = absl::ToUnixNanos(absl::Now());
+    if (task->deadline_ns - now_ns <
+        absl::ToInt64Nanoseconds(absl::Milliseconds(5))) {
+      front = true;
+    }
+  }
+  if (front) {
+    if (rq_.empty()) {
+      task->vruntime = absl::ZeroDuration();
+    } else {
+      task->vruntime = (*rq_.begin())->vruntime - absl::Nanoseconds(1);
+    }
+    InsertTaskIntoRq(task);
+    return;
+  }
+
+  // Default CFS placement.
   task->vruntime = std::max(min_vruntime_, task->vruntime);
   InsertTaskIntoRq(task);
 }
@@ -1143,6 +1160,12 @@ void CfsScheduler::BoostTask(Gtid gtid) {
     cs->run_queue.BoostTaskInRq(task);
     cs->preempt_curr = true;
   }
+}
+
+void CfsScheduler::SetLatencyClass(Gtid gtid, bool on) {
+  CfsTask* task = allocator()->GetTask(gtid);
+  if (!task) return;
+  task->latency_class = on;
 }
 
 void CfsScheduler::SetCustomSlice(Gtid gtid, absl::Duration slice) {

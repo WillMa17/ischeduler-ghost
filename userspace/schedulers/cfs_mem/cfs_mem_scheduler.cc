@@ -102,9 +102,15 @@ void MemCfsAgent::AgentThread() {
 
         switch (kind) {
           case kHintLatencySensitive:
+            // Sticky: every future enqueue of this task lands at the
+            // front of the rq. We also boost the current state in case
+            // the task is on rq right now.
+            scheduler_->SetLatencyClass(gtid, true);
             scheduler_->BoostTask(gtid);
             break;
           case kHintDeadline:
+            // Deadline tracking is sticky too. EnqueueTask inspects
+            // deadline_ns on every wake and front-places urgent tasks.
             scheduler_->SetDeadline(gtid, payload.deadline_unix_ns);
             scheduler_->BoostTask(gtid);
             break;
