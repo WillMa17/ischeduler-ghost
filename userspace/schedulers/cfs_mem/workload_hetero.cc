@@ -1,32 +1,13 @@
-// workload_hetero.cc -- one heterogeneous workload, four scheduler policies.
+// workload_hetero.cc -- 3-class heterogeneous workload + 4 hint_mode runs.
 //
-// Three classes of ghost threads run concurrently on the same CPU set; each
-// class is structured to stress a *different* SLO bottleneck:
+// Classes (run concurrently on the same CPU set):
+//   latency    : sleep + tiny matmul on a short period
+//   deadline   : sleep + medium matmul with a budget (half tight, half loose)
+//   throughput : back-to-back matmul, no sleep
 //
-//   latency class    : sleep + tiny matmul on a short period -- tests the
-//                      wake-to-start delay path.
-//   deadline class   : sleep + medium matmul with a budget; half the workers
-//                      have a tight budget, half have a loose budget so that
-//                      EDF-like ordering (earlier deadline first) actually
-//                      differentiates between them.
-//   throughput class : back-to-back matmul, no sleep -- tests how much useful
-//                      work fits between context switches.
-//
-// We then run the *same* workload four times under four scheduler policies,
-// selected by --hint_mode:
-//
-//   baseline   -> no class sends any cue (Phase A).
-//   latency    -> only latency-class workers flag themselves (latency_class
-//                 sticky); deadline and throughput unchanged.
-//   throughput -> only throughput-class workers request a long custom slice;
-//                 the other two unchanged.
-//   deadline   -> only deadline-class workers publish their per-event
-//                 absolute deadline; the other two unchanged.
-//
-// The expectation is that each policy moves *its own class's KPI* without
-// materially harming the other two. Because each policy only flags one
-// class, the cross-class interference seen in earlier "all hints on at once"
-// runs is avoided.
+// --hint_mode selects which class publishes a cue this run:
+//   baseline | latency | throughput | deadline
+// Only the matching class flags itself; the other two are untouched.
 
 #include <fcntl.h>
 #include <sys/mman.h>

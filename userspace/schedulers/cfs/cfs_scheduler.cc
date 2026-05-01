@@ -1051,19 +1051,15 @@ void CfsRq::EnqueueTask(CfsTask* task) {
 
   DPRINT_CFS(2, absl::StrFormat("[%s]: Enqueing task", task->gtid.describe()));
 
-  // Hint-aware front-of-queue placement. When a task is sticky-latency
-  // (latency_class) or has a deadline within the urgency window, put it
-  // at the front so a wakeup gets CPU on the next Schedule pass. The
-  // window is 30 ms so that tasks with tight per-event budgets (e.g.
-  // 5 ms) are always boosted at submit time, while tasks with loose
-  // budgets (e.g. 60 ms) only become urgent if they fall behind. This
-  // is the EDF-like differentiation that makes the deadline policy do
-  // something different from the latency policy.
+  // Hint-aware front-of-queue placement. The 30 ms window discriminates
+  // tight (e.g. 5 ms budget -> always urgent at submit) from loose (60 ms
+  // budget -> only urgent if it falls behind). The `> 0` guard keeps
+  // missed deadlines from pinning a task at the head of the rq forever.
   bool front = task->latency_class;
   if (!front && task->deadline_ns != 0) {
-    int64_t now_ns = absl::ToUnixNanos(absl::Now());
-    if (task->deadline_ns - now_ns <
-        absl::ToInt64Nanoseconds(absl::Milliseconds(30))) {
+    int64_t until = task->deadline_ns - absl::ToUnixNanos(absl::Now());
+    if (until > 0 &&
+        until < absl::ToInt64Nanoseconds(absl::Milliseconds(30))) {
       front = true;
     }
   }

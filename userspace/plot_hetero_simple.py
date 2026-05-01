@@ -22,9 +22,9 @@ import numpy as np
 POLICIES = ["baseline", "latency", "throughput", "deadline"]
 LABELS = {
     "baseline":   "Baseline\n(no hints)",
-    "latency":    "Latency\nSLO",
-    "throughput": "Throughput\nSLO",
-    "deadline":   "Deadline\nSLO",
+    "latency":    "Latency\nas hints",
+    "throughput": "Throughput\nas hints",
+    "deadline":   "Deadline\nas hints",
 }
 COLORS = {
     "baseline":   "#888888",
@@ -127,9 +127,8 @@ def plot_throughput(by_policy, out_path):
 
 
 def plot_deadline(by_policy, out_path):
-    # Loose-budget miss is essentially always 0 % (the sanity check) so we
-    # only plot the tight-budget bar -- one bar per SLO, no legend, no
-    # companion loose bars.
+    # Tight-budget miss only. The loose-budget miss is the sanity check
+    # (always ~0 %) and adds clutter when plotted alongside.
     tight = []
     labels = []
     colors = []

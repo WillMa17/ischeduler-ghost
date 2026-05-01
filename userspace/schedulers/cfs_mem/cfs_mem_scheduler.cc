@@ -5,7 +5,9 @@
 #include <unistd.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "absl/time/clock.h"
@@ -76,18 +78,17 @@ void MemCfsAgent::AgentThread() {
 
   PeriodicEdge debug_out(absl::Seconds(1));
 
+  // GHOST_DISABLE_HINT_DISPATCH=1 -> skip Poll() and RescueDeadlineTasks
+  // (used by the overhead experiment to isolate the hint path's cost).
+  const char* env = std::getenv("GHOST_DISABLE_HINT_DISPATCH");
+  const bool disable_hint_dispatch = env && std::string(env) == "1";
+
   while (!Finished() || !scheduler_->Empty(cpu())) {
     std::vector<MemCue> cues;
-    if (poll_->Poll(region_, cues) > 0) {
-      // Hint-aware dispatch. message[0] selects the action; remaining
-      // bytes are an optional HintPayload struct (slice_us / deadline_ns).
-      //   kHintLatencySensitive -> immediate vruntime boost.
-      //   kHintDeadline         -> record absolute deadline AND boost on
-      //                            arrival (treat as latency for one frame).
-      //   kHintThroughput       -> install a per-task custom slice so CFS
-      //                            stops preempting the task on the default
-      //                            period boundary.
-      //   kHintBatch / kHintNone -> no-op.
+    if (!disable_hint_dispatch && poll_->Poll(region_, cues) > 0) {
+      // Dispatch on cue.message[0]; cue.message[1..16] is an optional
+      // HintPayload struct (slice_us / deadline_unix_ns). See enum
+      // CueKind in cfs_mem_scheduler.h.
       for (const auto& cue : cues) {
         if (cue.message.empty()) continue;
         char kind = cue.message[0];
@@ -102,37 +103,17 @@ void MemCfsAgent::AgentThread() {
 
         switch (kind) {
           case kHintLatencySensitive:
-            // Sticky: every future enqueue of this task lands at the
-            // front of the rq. We also boost the current state in case
-            // the task is on rq right now.
+            // Sticky front-of-queue on every future enqueue; BoostTask
+            // also handles the case where the task is already on rq.
             scheduler_->SetLatencyClass(gtid, true);
             scheduler_->BoostTask(gtid);
             break;
           case kHintDeadline: {
-            // Deadline policy. Two effects per cue:
-            //
-            // 1. Track the absolute deadline so RescueDeadlineTasks can
-            //    find this task on every Schedule() pass.
-            //
-            // 2. If the deadline is "tight" (already within the urgency
-            //    window), also set latency_class=true so EVERY future
-            //    EnqueueTask of this task front-places it. The sticky
-            //    flag is what actually moves the deadline KPI:
-            //
-            //      - the cue arrives WHILE the worker is mid-frame, so
-            //        both BoostTask and the per-event urgency check in
-            //        EnqueueTask only catch the boost on a FUTURE wake;
-            //      - by the time the next wake happens, the previous
-            //        deadline_ns has already passed (= in the past), so
-            //        the urgency check skips it and the wake gets
-            //        default placement, defeating the purpose;
-            //      - the sticky latency_class flag bypasses that timing
-            //        issue: it persists across wakes and front-places
-            //        every enqueue without depending on a fresh cue.
-            //
-            //    We restrict the sticky flag to TIGHT tasks (deadline
-            //    closer than 30 ms) so loose-deadline workers in the
-            //    same class don't get spuriously prioritised.
+            // Set sticky latency_class only if the deadline is tight
+            // (within the 30 ms urgency window). The cue arrives while
+            // the worker is mid-frame, so a per-event boost would be
+            // too late for the current wake; the sticky flag makes the
+            // NEXT wake front-place automatically.
             scheduler_->SetDeadline(gtid, payload.deadline_unix_ns);
             int64_t now_ns = absl::ToUnixNanos(absl::Now());
             if (payload.deadline_unix_ns - now_ns <
@@ -143,30 +124,10 @@ void MemCfsAgent::AgentThread() {
             break;
           }
           case kHintThroughput:
-            // Throughput policy. Two effects per cue:
-            //
-            // 1. Install a custom slice (typically tens of ms) so CFS's
-            //    periodic preemption check does not yank this task off
-            //    the CPU on the default ~1 ms boundary. This amortises
-            //    context-switch overhead and lets the matmul keep its
-            //    hot cache state across more iterations.
-            //
-            // 2. Set latency_class=true so the task is sticky
-            //    front-of-queue. This matters when the throughput task
-            //    DOES eventually get preempted (e.g. by CFS at the end
-            //    of its slice, or by a TASK_WAKEUP). Without the sticky
-            //    flag, the task would land back in default-CFS position
-            //    and have to wait its turn behind every other thread on
-            //    the rq before getting CPU again. The sticky flag pulls
-            //    it back to the front so it resumes promptly. Net
-            //    effect: throughput-class wall time per slice goes up
-            //    (better cache reuse) AND idle-between-slice time goes
-            //    down (back on CPU faster), so total ops increase.
-            //
-            //    Side effect: latency / deadline classes get worse
-            //    KPIs in throughput mode. That is the intended trade-
-            //    off -- throughput mode optimises throughput, not the
-            //    other two SLOs.
+            // Custom slice stops periodic CFS preemption mid-matmul.
+            // Sticky flag pulls the task back to the head of the rq
+            // when its slice ends, so it does not sink behind every
+            // other thread before resuming.
             if (payload.slice_us > 0) {
               scheduler_->SetCustomSlice(
                   gtid, absl::Microseconds(payload.slice_us));
@@ -179,12 +140,11 @@ void MemCfsAgent::AgentThread() {
       }
     }
 
-    // Independent of cues: every Schedule() pass, rescue any deadline-
-    // tagged task whose deadline is closer than 30 ms. This window
-    // matches the urgency threshold used inside CfsRq::EnqueueTask so
-    // a task that wasn't on-rq at boost time is still rescued before
-    // its deadline expires.
-    scheduler_->RescueDeadlineTasks(absl::Milliseconds(30));
+    // Catches deadline-tagged tasks that became urgent after their cue
+    // was processed. 30 ms matches the CfsRq::EnqueueTask urgency window.
+    if (!disable_hint_dispatch) {
+      scheduler_->RescueDeadlineTasks(absl::Milliseconds(30));
+    }
 
     scheduler_->Schedule(cpu(), status_word());
 

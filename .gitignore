@@ -6,8 +6,15 @@ userspace/bazel-userspace
 userspace/MODULE.bazel
 userspace/MODULE.bazel.lock
 
-# VM disk image (12GB, generated locally)
+# VM disk image (12 GB, generated locally)
 vm/ghost.img
+
+# Experiment output (CSV + PNG). Reproducible by re-running demo.sh.
+*.csv
+*.png
+results/
+latest_csv/
+overhead_csv/
 
 # Editor / OS
 *.swp

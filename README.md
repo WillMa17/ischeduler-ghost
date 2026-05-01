@@ -1,63 +1,105 @@
-# ghOSt Playground
+# iSchedular
 
-Workspace for experimenting with ghOSt (userspace Linux scheduler delegation).
-Paper: SOSP '21 — https://dl.acm.org/doi/10.1145/3477132.3483542
+Hint-aware extension of the ghOSt userspace CFS scheduler. Applications
+publish per-thread SLO intent through a 64-byte cache-line in shared
+memory (`/dev/shm/ghost_mem_cues`); the userspace scheduler agent reads
+the cues every `Schedule()` pass and adjusts `vruntime`, custom slice,
+and deadline tracking on the corresponding `CfsTask`.
 
-## Directory structure
+## Repository layout
 
 ```
-ghost/
-  kernel/     # ghost-kernel: Linux 5.11 + ghOSt scheduling class patches
-  userspace/  # ghost-userspace: agent library + example policies
-  vm/         # QEMU VM assets (disk image, run script) — to be set up
+.
+├── README.md                  This file.
+├── userspace/                 Userspace agent + workloads + scripts.
+│   ├── DEMO.md                How to record the demo (one-pane / two-pane).
+│   ├── demo.sh                Single command: runs all 4 policies + prints
+│   │                          the comparison table.
+│   ├── plot_hetero_simple.py  Renders the 3 KPI bar charts from CSV output.
+│   ├── run_hetero_experiment.sh
+│   │                          Same as demo.sh but no banners, for scripting.
+│   ├── BUILD                  Bazel build targets.
+│   └── schedulers/
+│       ├── cfs/cfs_scheduler.{h,cc}
+│       │                      Stock ghOSt CFS, extended with:
+│       │                        - CfsTask::latency_class (sticky front-of-rq)
+│       │                        - CfsTask::custom_slice (per-task slice)
+│       │                        - CfsTask::deadline_ns
+│       │                        - SetLatencyClass / SetCustomSlice /
+│       │                          SetDeadline / RescueDeadlineTasks APIs
+│       │                        - EnqueueTask front-places latency_class
+│       │                          tasks and tasks within the deadline
+│       │                          urgency window.
+│       └── cfs_mem/
+│           ├── cfs_mem_scheduler.{h,cc}
+│           │                  Hint protocol (cue layout + kHint* constants),
+│           │                  shared-memory region, agent dispatch loop.
+│           ├── cfs_mem_agent.cc
+│           │                  agent_cfs_mem main(): builds the agent process.
+│           ├── workload_hetero.cc
+│           │                  3-class benchmark used by the demo. --hint_mode
+│           │                  selects which class publishes a cue.
+│           └── README.md      Lower-level notes on the cue protocol.
+└── vm/
+    ├── bzImage                Pre-built ghOSt kernel (Linux 5.11 + ghost
+    │                          scheduling class).
+    ├── setup-vm.sh            One-time Debian-bookworm rootfs setup.
+    └── run-vm.sh              QEMU + KVM launcher (4 vCPU, 4 GB RAM,
+                               port 2222 -> 22 forwarded for ssh).
 ```
 
-## Workflow overview
+## Building
 
-### Step 1 — Build the ghOSt kernel
+Inside the VM (the ghost-userspace library only links against the ghOSt
+kernel, so build inside the VM running that kernel):
 
 ```bash
-cd kernel/
-cp /boot/config-$(uname -r) .config   # start from current kernel config
-make olddefconfig
-make -j$(nproc)
+cd /path/to/userspace
+bazel build -c opt //:agent_cfs_mem //:workload_hetero
 ```
 
-The resulting kernel image will be at `arch/x86/boot/bzImage`.
+## Running the demo
 
-### Step 2 — Set up a VM disk image
-
-See vm/README.md (to be written) for how to create an Alpine or Debian image
-and boot it with the ghOSt kernel under QEMU + KVM.
-
-### Step 3 — Build the userspace agents
-
-Must be done *inside* the VM running the ghOSt kernel (the userspace library
-makes syscalls specific to the ghOSt scheduling class).
+Inside the VM:
 
 ```bash
-# Inside the VM:
-sudo apt install libnuma-dev libcap-dev libelf-dev libbfd-dev gcc clang-12 llvm zlib1g-dev python-is-python3
-# Install Bazel: https://docs.bazel.build/versions/main/install.html
-bazel build ...
+cd /path/to/userspace
+bash demo.sh
 ```
 
-### Step 4 — Run an example agent
+`demo.sh` runs the heterogeneous workload four times, once per
+scheduler policy (baseline / latency / throughput / deadline), prints
+per-second progress, and ends with a comparison table that stars the
+winning policy on each KPI. Per-event CSVs land in `/tmp/hetero_*.csv`;
+render the bar charts with:
 
 ```bash
-# Inside the VM, as root:
-bazel run //agents/fifo:fifo_per_cpu_agent -- --ghost_cpus 0-1
+python3 plot_hetero_simple.py --in-dir /tmp --out-dir results
 ```
 
-## Key source locations (userspace/)
+See `userspace/DEMO.md` for the recording recipe (single-pane and
+two-pane setups, htop / `watch ls /sys/fs/ghost/` overlays).
 
-- `lib/`              — core ghOSt API (transactions, message queues, status words)
-- `agents/`           — example scheduling policies (FIFO, CFS, Shinjuku, EDF...)
-- `schedulers/`       — more complete scheduler implementations
-- `tests/`            — unit + integration tests
+## Reproducing the kernel-level overhead experiment
 
-## Key source locations (kernel/)
+To measure how much the hint-dispatch path costs when no cues are sent,
+re-run baseline twice with the env switch built into the agent:
 
-- `kernel/sched/ghost.c`   — ghOSt scheduling class (~3,777 LOC per paper)
-- `kernel/sched/core.c`    — hooks into the main scheduler
-- `include/uapi/linux/ghost.h` — kernel-userspace API (messages, syscalls)
+```bash
+# With Poll() + RescueDeadlineTasks (current default)
+bazel-bin/agent_cfs_mem --ghost_cpus 0-3 &
+bazel-bin/workload_hetero --hint_mode=baseline --output_file=/tmp/with_dispatch.csv
+
+# Without (loop equivalent to a stock CFS userspace agent)
+GHOST_DISABLE_HINT_DISPATCH=1 bazel-bin/agent_cfs_mem --ghost_cpus 0-3 &
+bazel-bin/workload_hetero --hint_mode=baseline --output_file=/tmp/no_dispatch.csv
+```
+
+In our 3-iteration measurement the always-on hint dispatch path costs
+< 1 % on most KPIs (~7.6 % on latency p999 only).
+
+## Branches
+
+  - `main`         original ghost-userspace snapshot
+  - `28april`      mid-development snapshots
+  - `final`        this submission
