@@ -48,6 +48,64 @@ and deadline tracking on the corresponding `CfsTask`.
                                port 2222 -> 22 forwarded for ssh).
 ```
 
+## VM setup
+
+All building and running happens inside a QEMU VM booting the ghOSt-patched
+kernel. The host only needs QEMU and KVM.
+
+**Prerequisites (host):**
+
+```bash
+sudo apt install qemu-system-x86   # or equivalent on your distro
+ls /dev/kvm                        # must exist; add yourself to the kvm group if needed
+```
+
+**One-time image creation (run once, as root):**
+
+```bash
+sudo bash vm/setup-vm.sh
+```
+
+Creates a 12 GB Debian Bookworm image at `vm/ghost.img`. Takes a few minutes.
+
+**Boot the VM:**
+
+```bash
+sudo bash vm/run-vm.sh
+```
+
+Boots with 4 vCPUs, 4 GB RAM, the pre-built `vm/bzImage`, and your host home
+directory shared into the VM at `/mnt/host`. SSH is forwarded on port 2222:
+
+```bash
+ssh -p 2222 root@localhost   # password: ghost
+```
+
+**First-time guest setup (once after image creation):**
+
+```bash
+apt install -y clang-12   # required for BPF compilation
+```
+
+**Sync the source tree into the VM:**
+
+Bazel cannot build directly from `/mnt/host` due to sandbox and 9p permission
+issues, so copy the tree to a local path inside the VM:
+
+```bash
+cp -r /mnt/host/ghost/userspace /root/ghost-userspace
+cd /root/ghost-userspace
+```
+
+For incremental updates after editing files on the host:
+
+```bash
+cp -r /mnt/host/ghost/userspace/schedulers/cfs_mem /root/ghost-userspace/schedulers/
+cp /mnt/host/ghost/userspace/BUILD /root/ghost-userspace/BUILD
+```
+
+---
+
 ## Building
 
 Inside the VM (the ghost-userspace library only links against the ghOSt
